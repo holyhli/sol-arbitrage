@@ -1,0 +1,20 @@
+{
+  "name": "sol-arbitrage",
+  "version": "1.0.0",
+  "description": "Solana arbitrage bot",
+  "type": "module",
+  "main": "start.js",
+  "scripts": {
+    "start": "node start.js",
+    "dev": "node --watch start.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@meteora-ag/token-sdk": "^0.5.0",
+    "@solana/web3.js": "^1.90.0",
+    "dotenv": "^16.3.1",
+    "bs58": "^5.0.0"
+  }
+}
