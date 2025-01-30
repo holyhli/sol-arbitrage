@@ -1,4 +1,3 @@
-import Decimal from 'decimal.js';
 import { ARBITRAGE_CONSTANTS } from './utils/constants.js';
 
 export class ArbitrageOptimizer {
@@ -12,208 +11,72 @@ export class ArbitrageOptimizer {
     }
 
     /**
-     * Find optimal arbitrage route
+     * Find optimal arbitrage route between pools
      * @returns {Promise<import('./utils/types.js').ArbitrageRoute | null>}
      */
     async findOptimalRoute() {
-        // Sort pools by price to find potential arbitrage opportunities
-        const sortedPools = [...this.poolMetrics].sort((a, b) => a.price - b.price);
-
         let bestRoute = null;
-        let maxProfit = new Decimal(0);
+        let maxProfit = 0;
 
-        // Compare each pool with others to find price differences
-        for (let i = 0; i < sortedPools.length; i++) {
-            for (let j = i + 1; j < sortedPools.length; j++) {
-                const sourcePool = sortedPools[i];
-                const destPool = sortedPools[j];
+        // Compare all pool pairs
+        for (let i = 0; i < this.poolMetrics.length; i++) {
+            for (let j = i + 1; j < this.poolMetrics.length; j++) {
+                const pool1 = this.poolMetrics[i];
+                const pool2 = this.poolMetrics[j];
 
-                // Skip if spread is too small
-                const priceDiff = new Decimal(destPool.price).minus(sourcePool.price);
-                const relativePriceDiff = priceDiff.div(sourcePool.price);
+                const priceDiff = Math.abs(pool1.price - pool2.price);
+                if (priceDiff === 0) continue;
 
-                if (relativePriceDiff.lt(this.getTotalFees(sourcePool, destPool))) {
-                    continue;
-                }
+                // Calculate potential profit considering fees
+                const tradingFees = this.calculateTradingFees(pool1, pool2);
+                const networkFees = this.calculateNetworkFees();
+                const totalFees = tradingFees + networkFees;
 
-                // Find optimal amount for the arbitrage
-                const route = await this.calculateOptimalTrade(sourcePool, destPool);
+                // Estimate profit based on price difference
+                const baseAmount = Math.min(
+                    pool1.activeLiquidity.solAmount,
+                    pool2.activeLiquidity.solAmount
+                );
+                const estimatedProfit = (priceDiff * baseAmount) - totalFees;
 
-                if (route && route.expectedProfit.gt(maxProfit)) {
-                    maxProfit = route.expectedProfit;
-                    bestRoute = route;
-                }
-            }
-        }
-
-        if (!bestRoute || maxProfit.lt(ARBITRAGE_CONSTANTS.MIN_PROFIT_THRESHOLD)) {
-            return null;
-        }
-
-        return this.adjustRouteForNetworkConditions(bestRoute);
-    }
-
-    /**
-     * Calculate total fees for a route
-     * @param {import('./utils/types.js').PoolMetrics} sourcePool
-     * @param {import('./utils/types.js').PoolMetrics} destPool
-     * @returns {Decimal} Total fees as decimal
-     */
-    getTotalFees(sourcePool, destPool) {
-        const sourceFees = new Decimal(sourcePool.fees.baseFee)
-            .plus(sourcePool.fees.volatilityFee || 0);
-        const destFees = new Decimal(destPool.fees.baseFee)
-            .plus(destPool.fees.volatilityFee || 0);
-
-        return sourceFees.plus(destFees)
-            .plus(ARBITRAGE_CONSTANTS.MAX_SLIPPAGE) // Add slippage tolerance
-            .plus(this.networkConditions.recommendedPriorityFee); // Add network fees
-    }
-
-    /**
-     * Calculate optimal trade amount and expected profit
-     * @param {import('./utils/types.js').PoolMetrics} sourcePool
-     * @param {import('./utils/types.js').PoolMetrics} destPool
-     * @returns {Promise<Object | null>}
-     */
-    async calculateOptimalTrade(sourcePool, destPool) {
-        try {
-            // Use binary search to find optimal trade size
-            let left = new Decimal(0.1); // Min trade size in SOL
-            let right = new Decimal(Math.min(
-                sourcePool.activeLiquidity.solAmount,
-                destPool.activeLiquidity.solAmount
-            )).div(1e9); // Convert from lamports to SOL
-
-            let bestTrade = null;
-
-            while (left.lt(right)) {
-                const mid = left.plus(right).div(2);
-                const trade = await this.simulateTrade(sourcePool, destPool, mid);
-
-                if (!trade) {
-                    right = mid;
-                    continue;
-                }
-
-                if (trade.expectedProfit.gt(0)) {
-                    bestTrade = trade;
-                    // If profit is increasing, try larger size
-                    left = mid.plus(new Decimal(0.01));
-                } else {
-                    right = mid;
+                if (estimatedProfit > maxProfit && estimatedProfit > ARBITRAGE_CONSTANTS.MIN_PROFIT_THRESHOLD) {
+                    maxProfit = estimatedProfit;
+                    bestRoute = {
+                        pool1: pool1.address,
+                        pool2: pool2.address,
+                        expectedProfit: estimatedProfit,
+                        fees: {
+                            tradingFees,
+                            networkFees
+                        }
+                    };
                 }
             }
-
-            return bestTrade;
-        } catch (error) {
-            console.error('Error calculating optimal trade:', error);
-            return null;
         }
+
+        return bestRoute;
     }
 
     /**
-     * Simulate a trade and calculate expected profit
-     * @param {import('./utils/types.js').PoolMetrics} sourcePool
-     * @param {import('./utils/types.js').PoolMetrics} destPool
-     * @param {Decimal} amount Amount in SOL
-     * @returns {Promise<Object | null>}
+     * Calculate trading fees for a route
+     * @param {import('./utils/types.js').PoolMetrics} pool1
+     * @param {import('./utils/types.js').PoolMetrics} pool2
+     * @returns {number}
      */
-    async simulateTrade(sourcePool, destPool, amount) {
-        try {
-            const inputAmount = amount.mul(1e9).round(); // Convert to lamports
-
-            // Calculate expected output considering price impact and fees
-            const buyAmount = this.calculateExpectedOutput(
-                sourcePool,
-                inputAmount.toString(),
-                true
-            );
-
-            const sellAmount = this.calculateExpectedOutput(
-                destPool,
-                buyAmount.toString(),
-                false
-            );
-
-            const profit = sellAmount.minus(inputAmount);
-            const profitInUSD = profit.mul(sourcePool.price).div(1e9);
-
-            const totalFees = this.getTotalFees(sourcePool, destPool)
-                .mul(inputAmount);
-
-            const netProfit = profitInUSD.minus(totalFees);
-
-            if (netProfit.lte(0)) {
-                return null;
-            }
-
-            return {
-                sourcePool: sourcePool.address,
-                destinationPool: destPool.address,
-                inputAmount: inputAmount.toString(),
-                expectedOutput: sellAmount.toString(),
-                expectedProfit: netProfit,
-                fees: {
-                    tradingFees: totalFees.toString(),
-                    networkFees: this.networkConditions.recommendedPriorityFee.toString()
-                }
-            };
-        } catch (error) {
-            console.error('Error simulating trade:', error);
-            return null;
-        }
+    calculateTradingFees(pool1, pool2) {
+        // Combined fees from both pools
+        const pool1Fees = pool1.fees.baseFee + pool1.fees.hostFee;
+        const pool2Fees = pool2.fees.baseFee + pool2.fees.hostFee;
+        return pool1Fees + pool2Fees;
     }
 
     /**
-     * Calculate expected output amount considering price impact
-     * @param {import('./utils/types.js').PoolMetrics} pool
-     * @param {string} inputAmount
-     * @param {boolean} isBuy
-     * @returns {Decimal}
+     * Calculate network fees including priority fees
+     * @returns {number}
      */
-    calculateExpectedOutput(pool, inputAmount, isBuy) {
-        const input = new Decimal(inputAmount);
-        const price = new Decimal(pool.price);
-        const liquidity = new Decimal(isBuy ?
-            pool.activeLiquidity.solAmount :
-            pool.activeLiquidity.usdcAmount
-        );
-
-        // Simple constant product formula with fees
-        const k = liquidity.mul(liquidity);
-        const fees = new Decimal(1).minus(pool.fees.baseFee);
-
-        if (isBuy) {
-            return input.mul(price).mul(fees);
-        } else {
-            return input.div(price).mul(fees);
-        }
-    }
-
-    /**
-     * Adjust route based on network conditions
-     * @param {Object} route
-     * @returns {import('./utils/types.js').ArbitrageRoute}
-     */
-    adjustRouteForNetworkConditions(route) {
-        const { congestion } = this.networkConditions;
-
-        // Adjust priority fee based on congestion
-        const adjustedPriorityFee = new Decimal(this.networkConditions.recommendedPriorityFee)
-            .mul(1 + congestion)
-            .toNumber();
-
-        // Determine execution strategy
-        const strategy = congestion > 0.8 ? 'aggressive' :
-                        congestion > 0.5 ? 'normal' : 'conservative';
-
-        return {
-            ...route,
-            execution: {
-                priorityFee: adjustedPriorityFee,
-                strategy
-            }
-        };
+    calculateNetworkFees() {
+        // Base network fee + priority fee based on congestion
+        const baseFee = 5000; // Base fee in lamports
+        return baseFee + this.networkConditions.recommendedPriorityFee;
     }
 }

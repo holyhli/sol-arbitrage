@@ -12,9 +12,12 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@meteora-ag/token-sdk": "^0.5.0",
+    "@coral-xyz/anchor": "^0.28.0",
+    "@meteora-ag/dlmm": "^1.3.10",
+    "@solana/spl-token": "^0.4.0",
     "@solana/web3.js": "^1.90.0",
-    "dotenv": "^16.3.1",
-    "bs58": "^5.0.0"
+    "bs58": "^5.0.0",
+    "decimal.js": "^10.5.0",
+    "dotenv": "^16.3.1"
   }
 }

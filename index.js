@@ -1,4 +1,6 @@
 import { Connection, Keypair } from '@solana/web3.js';
+import pkg from '@meteora-ag/dlmm';
+const { DLMM } = pkg;
 import { PoolAnalyzer } from './poolAnalyzer.js';
 import { NetworkMonitor } from './networkMonitor.js';
 import { ArbitrageOptimizer } from './optimizer.js';
@@ -12,6 +14,7 @@ export class ArbitrageManager {
      */
     constructor(connection, keypair) {
         this.connection = connection;
+        this.keypair = keypair;
         this.poolAnalyzer = new PoolAnalyzer(connection);
         this.networkMonitor = new NetworkMonitor(connection);
         this.simulator = new ArbitrageSimulator(connection, keypair);
@@ -99,13 +102,18 @@ export class ArbitrageManager {
      * @param {number} interval - Check interval in milliseconds
      */
     async startMonitoring(interval = 1000) {
+        console.log('Starting arbitrage monitoring...');
+        console.log('Using wallet:', this.keypair.publicKey.toString());
+
         while (true) {
             try {
                 const opportunity = await this.findArbitrageOpportunities();
 
                 if (opportunity) {
-                    // Opportunity found, emit event or execute
                     console.log('Arbitrage opportunity found:', opportunity);
+                    // Here you would execute the trade
+                } else {
+                    console.log('No profitable opportunities found');
                 }
 
                 // Wait for next interval
